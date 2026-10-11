@@ -141,7 +141,7 @@ mod json_tests {
         run_opcode_tests(LDY_ABS);
     }
     #[test]
-    fn test_ldy_aby() {
+    fn test_ldy_abx() {
         run_opcode_tests(LDY_ABX);
     }
 }

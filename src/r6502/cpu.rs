@@ -173,9 +173,9 @@ impl CPU {
                 instructions::LDY_ABS => self.ldy(bus, AddressingMode::Absolute),
                 instructions::LDY_ABX => self.ldy(bus, AddressingMode::AbsoluteX),
 
-                _ => todo!()
+                _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
             }
-            
+
             cycles_remaining = cycles_remaining.wrapping_sub(bus.clock() - clock_start);
         }
 
@@ -277,7 +277,7 @@ impl CPU {
                 if original_addr & 0xFF00 != addr & 0xFF00 {
                     bus.tick(4);
                 } else {
-                    bus.tick(5);
+                    bus.tick(3);
                 }
 
                 addr
