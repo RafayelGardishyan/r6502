@@ -192,6 +192,12 @@ impl CPU {
                 instructions::STY_ZPX => self.sty(bus, AddressingMode::ZeroPageX),
                 instructions::STY_ABS => self.sty(bus, AddressingMode::Absolute),
 
+                // Register Transfers
+                instructions::TAX => self.tax(bus),
+                instructions::TAY => self.tay(bus),
+                instructions::TXA => self.txa(bus),
+                instructions::TYA => self.tya(bus),
+
 
                 _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
             }
@@ -202,43 +208,67 @@ impl CPU {
         cycles - cycles_remaining
     }
 
-    fn lda<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, false);
-        self.a = bus.read(addr);
+    #[inline]
+    fn load_register<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode) -> Byte {
+        let addr = self.resolve_address(bus, mode, false);
+        let val = bus.read(addr);
         bus.tick(1);
-        self.set_nz(self.a)
+        self.set_nz(val);
+        val
+    }
+
+    #[inline]
+    fn store_register<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode, val: Byte) {
+        let addr = self.resolve_address(bus, mode, true);
+        bus.write(addr, val);
+        bus.tick(1);
+    }
+
+    #[inline]
+    fn transfer_r2r<B: Bus>(&mut self, bus: &mut B, src: Byte) -> Byte{
+        self.set_nz(src);
+        bus.tick(1);
+        src
+    }
+
+    fn lda<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
+        self.a = self.load_register(bus, addressing_mode);
     }
 
     fn ldx<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, false);
-        self.x = bus.read(addr);
-        bus.tick(1);
-        self.set_nz(self.x)
+        self.x = self.load_register(bus, addressing_mode);
     }
 
     fn ldy<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, false);
-        self.y = bus.read(addr);
-        bus.tick(1);
-        self.set_nz(self.y)
+        self.y = self.load_register(bus, addressing_mode);
     }
 
     fn sta<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, true);
-        bus.write(addr, self.a);
-        bus.tick(1);
+        self.store_register(bus, addressing_mode, self.a);
     }
 
     fn stx<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, true);
-        bus.write(addr, self.x);
-        bus.tick(1);
+        self.store_register(bus, addressing_mode, self.x);
     }
 
     fn sty<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode, true);
-        bus.write(addr, self.y);
-        bus.tick(1);
+        self.store_register(bus, addressing_mode, self.y);
+    }
+
+    fn tax<B: Bus>(&mut self, bus: &mut B) {
+        self.x = self.transfer_r2r(bus, self.a)
+    }
+
+    fn tay<B: Bus>(&mut self, bus: &mut B) {
+        self.y = self.transfer_r2r(bus, self.a)
+    }
+
+    fn txa<B: Bus>(&mut self, bus: &mut B) {
+        self.a = self.transfer_r2r(bus, self.x)
+    }
+
+    fn tya<B: Bus>(&mut self, bus: &mut B) {
+        self.a = self.transfer_r2r(bus, self.y)
     }
 
     fn set_nz(&mut self, val: Byte) {

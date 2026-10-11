@@ -188,7 +188,7 @@ mod json_tests {
         run_opcode_tests(STX_ABS);
     }
 
-    // STy
+    // STY
     #[test]
     fn test_sty_zp() {
         run_opcode_tests(STY_ZP);
@@ -200,5 +200,23 @@ mod json_tests {
     #[test]
     fn test_sty_abs() {
         run_opcode_tests(STY_ABS);
+    }
+
+    // Register Transfers (TAX TAY TXA TYA)
+    #[test]
+    fn test_tax() {
+        run_opcode_tests(TAX);
+    }
+    #[test]
+    fn test_tay() {
+        run_opcode_tests(TAY);
+    }
+    #[test]
+    fn test_txa() {
+        run_opcode_tests(TXA);
+    }
+    #[test]
+    fn test_tya() {
+        run_opcode_tests(TYA);
     }
 }
