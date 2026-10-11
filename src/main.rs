@@ -1,20 +1,20 @@
-use crate::r6502::cpu::{CPU, MEM};
+use crate::r6502::cpu::{Bus, MockRAM, CPU};
 use crate::r6502::instructions::*;
 
 pub mod r6502;
 mod test;
 
 fn main() {
-    let mut mem = MEM::default();
+    let mut mem = MockRAM::default();
     let mut cpu = CPU::default();
 
     cpu.reset(&mut mem);
 
     // Sample program
-    mem[0xFFFC] = LDA_ABX; // A <- Absolute addr + X
-    mem[0xFFFD] = 0x41; // Address to read from
-    mem[0xFFFE] = 0x69; // Address to read from
-    mem[0x6942] = 0x67; // Value to be read
+    mem.write(0xFFFC, LDA_ABX); // A <- Absolute addr + X
+    mem.write(0xFFFD, 0x41); // Address to read from
+    mem.write(0xFFFE, 0x69); // Address to read from
+    mem.write(0x6942, 0x67); // Value to be read
 
     cpu.x = 0x01;
 

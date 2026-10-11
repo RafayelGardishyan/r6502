@@ -1,6 +1,3 @@
-use std::ops;
-use std::ops::Index;
-use std::process::exit;
 use super::instructions;
 
 pub type Byte = u8;
@@ -12,8 +9,19 @@ pub const ONE: Bit = true;
 
 const MAX_MEMORY: usize = 1024 * 64; // 64 Kb
 
-pub struct MEM {
+pub trait Bus {
+    // Memory
+    fn read (&mut self, address: Word) -> Byte;
+    fn write (&mut self, address: Word, data: Byte);
+
+    // Clock
+    fn tick(&mut self, cycles: usize) -> usize;
+    fn clock(&self) -> usize;
+}
+
+pub struct MockRAM {
     data: [Byte; MAX_MEMORY],
+    clock: usize
 }
 
 #[derive(Clone, Copy)]
@@ -27,40 +35,57 @@ pub struct CPU {
     pub(crate) a:  Byte, // Accumulator
     pub(crate) x:  Byte, // Index Register X
     pub(crate) y:  Byte, // Index Register Y
-    pub(crate) sf: StatusFlags // Status Flags
+    pub(crate) sf: StatusFlags, // Status Flags
 }
 
 pub enum Register {
-    PC, SP, A, X, Y, NOREG
+    PC, SP, A, X, Y
 }
 
-impl MEM {
+pub enum AddressingMode {
+    Immediate,
+    ZeroPage,
+    ZeroPageX,
+    ZeroPageY,
+    Absolute,
+    AbsoluteX,
+    AbsoluteY,
+    IndexedIndirect,
+    IndirectIndexed
+}
+
+impl MockRAM {
     pub fn init(&mut self) {
-        for i in 0..MAX_MEMORY {
-            self.data[i] = 0;
-        }
+        self.data.fill(0)
     }
 }
 
-impl Default for MEM {
+impl Default for MockRAM {
     fn default() -> Self {
-        MEM {
-            data: [0; MAX_MEMORY]
+        MockRAM {
+            data: [0; MAX_MEMORY],
+            clock: 0
         }
     }
 }
 
-impl Index<Word> for MEM {
-    type Output = Byte;
-
-    fn index(&self, index: Word) -> &Self::Output {
-        &self.data[index as usize]
+impl Bus for MockRAM {
+    fn read(&mut self, address: Word) -> Byte {
+        self.data[address as usize]
     }
-}
 
-impl ops::IndexMut<Word> for MEM {
-    fn index_mut(&mut self, index: Word) -> &mut Self::Output {
-        &mut self.data[index as usize]
+    fn write(&mut self, address: Word, data: Byte) {
+        self.data[address as usize] = data;
+    }
+
+    fn tick(&mut self, cycles: usize) -> usize {
+        self.clock += cycles;
+
+        self.clock
+    }
+
+    fn clock(&self) -> usize {
+        self.clock
     }
 }
 
@@ -95,16 +120,16 @@ impl Default for CPU {
             a:  0,
             x:  0,
             y:  0,
-            sf: StatusFlags(0)
+            sf: StatusFlags(0),
         }
     }
 }
 impl CPU {
-    pub fn reset(&mut self, mem: &mut MEM) {
+    pub fn reset(&mut self, mem: &mut MockRAM) {
         self.reset_with_address(0xFFFC, mem)
     }
 
-    fn reset_with_address(&mut self, reset_vector: Word, mem: &mut MEM) {
+    fn reset_with_address(&mut self, reset_vector: Word, mem: &mut MockRAM) {
         self.pc = reset_vector;
         self.sp = 0xFF;
         self.x = 0;
@@ -114,150 +139,129 @@ impl CPU {
         mem.init();
     }
 
-    pub fn execute(&mut self, cycles: i32, mem: &mut MEM) -> i32 {
+    pub fn execute<B: Bus>(&mut self, cycles: usize, bus: &mut B) -> usize {
         let mut cycles_remaining = cycles;
 
         while cycles_remaining > 0 {
-            let (instruction, nc) = self.fetch_byte(cycles_remaining, &mem);
-            cycles_remaining = nc;
+            let clock_start = bus.clock();
+            let instruction = self.fetch_byte(bus);
+            bus.tick(1);
 
             match instruction {
                 // LDA
-                instructions::LDA_IMM  =>
-                    cycles_remaining = self.load_immediate(Register::A, cycles_remaining, mem),
-                instructions::LDA_ZP =>
-                    cycles_remaining = self.load_zero_page(Register::A, Register::NOREG, cycles_remaining, mem),
-                instructions::LDA_ZPX =>
-                    cycles_remaining = self.load_zero_page(Register::A, Register::X, cycles_remaining, mem),
-                instructions::LDA_ABS =>
-                    cycles_remaining = self.load_absolute(Register::A, cycles_remaining, mem),
-                instructions::LDA_ABX =>
-                    cycles_remaining = self.load_absolute_reg(Register::A, Register::X, cycles_remaining, mem),
-                instructions::LDA_ABY =>
-                    cycles_remaining = self.load_absolute_reg(Register::A, Register::Y, cycles_remaining, mem),
+                instructions::LDA_IMM  => self.lda(bus, AddressingMode::Immediate),
+                instructions::LDA_ZP => self.lda(bus, AddressingMode::ZeroPage),
+                instructions::LDA_ZPX => self.lda(bus, AddressingMode::ZeroPageX),
+                instructions::LDA_ABS => self.lda(bus, AddressingMode::Absolute),
+                instructions::LDA_ABX => self.lda(bus, AddressingMode::AbsoluteX),
+                instructions::LDA_ABY => self.lda(bus, AddressingMode::AbsoluteY),
 
                 // LDX
-                instructions::LDX_IMM =>
-                    cycles_remaining = self.load_immediate(Register::X, cycles_remaining, mem),
-                instructions::LDX_ZP =>
-                    cycles_remaining = self.load_zero_page(Register::X, Register::NOREG, cycles_remaining, mem),
-                instructions::LDX_ZPY =>
-                    cycles_remaining = self.load_zero_page(Register::X, Register::Y, cycles_remaining, mem),
-                instructions::LDX_ABS =>
-                    cycles_remaining = self.load_absolute(Register::X, cycles_remaining, mem),
-                instructions::LDX_ABY =>
-                    cycles_remaining = self.load_absolute_reg(Register::X, Register::Y, cycles_remaining, mem),
+                instructions::LDX_IMM => self.ldx(bus, AddressingMode::Immediate),
+                instructions::LDX_ZP => self.ldx(bus, AddressingMode::ZeroPage),
+                instructions::LDX_ZPY => self.ldx(bus, AddressingMode::ZeroPageY),
+                instructions::LDX_ABS => self.ldx(bus, AddressingMode::Absolute),
+                instructions::LDX_ABY => self.ldx(bus, AddressingMode::AbsoluteY),
 
                 // LDY
-                instructions::LDY_IMM =>
-                    cycles_remaining = self.load_immediate(Register::Y, cycles_remaining, mem),
-                instructions::LDY_ZP =>
-                    cycles_remaining = self.load_zero_page(Register::Y, Register::NOREG, cycles_remaining, mem),
-                instructions::LDY_ZPX =>
-                    cycles_remaining = self.load_zero_page(Register::Y, Register::X, cycles_remaining, mem),
-                instructions::LDY_ABS =>
-                    cycles_remaining = self.load_absolute(Register::Y, cycles_remaining, mem),
-                instructions::LDY_ABX =>
-                    cycles_remaining = self.load_absolute_reg(Register::Y, Register::X, cycles_remaining, mem),
+                instructions::LDY_IMM => self.ldy(bus, AddressingMode::Immediate),
+                instructions::LDY_ZP => self.ldy(bus, AddressingMode::ZeroPage),
+                instructions::LDY_ZPX => self.ldy(bus, AddressingMode::ZeroPageX),
+                instructions::LDY_ABS => self.ldy(bus, AddressingMode::Absolute),
+                instructions::LDY_ABX => self.ldy(bus, AddressingMode::AbsoluteX),
 
                 _ => todo!()
             }
+            
+            cycles_remaining -= bus.clock() - clock_start
         }
 
         cycles - cycles_remaining
     }
 
-    fn load_immediate(&mut self, target_register: Register, cycles: i32, mem: &MEM) -> i32 {
-        let (val, nc) = self.fetch_byte(cycles, mem);
-
-        self.set_register(target_register, val);
-        self.set_load_flags(val);
-
-        nc
+    fn lda<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode);
+        self.a = bus.read(addr);
+        bus.tick(1);
+        self.set_nz(self.a)
     }
 
-    fn set_load_flags(&mut self, val: Byte) {
+    fn ldx<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode);
+        self.x = bus.read(addr);
+        bus.tick(1);
+        self.set_nz(self.x)
+    }
+
+    fn ldy<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode);
+        self.y = bus.read(addr);
+        bus.tick(1);
+        self.set_nz(self.y)
+    }
+
+    fn set_nz(&mut self, val: Byte) {
         self.sf.set(StatusFlags::ZERO, val == 0);
         self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
     }
 
-    fn load_zero_page(&mut self, target_register: Register, add_register: Register, cycles: i32, mem: &MEM) -> i32 {
-        let (mut addr, mut nc) = self.fetch_byte(cycles, mem);
+    fn resolve_address<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode) -> Word {
+        match mode {
+            AddressingMode::Immediate => {
+                let addr = self.pc;
+                self.pc = self.pc.wrapping_add(1);
 
-        addr += match add_register {
-            Register::X => self.x,
-            Register::Y => self.y,
-            Register::NOREG => {nc += 1; 0},
-            _ => {println!("Incorrect Instruction, wtf"); exit(0)}
-        };
-
-        nc -= 1;
-
-        let (val, nc2) = self.read_byte_from_address(nc, addr as Word, mem);
-
-
-        self.set_register(target_register, val);
-        self.set_load_flags(val);
-
-        nc2
-    }
-
-    fn load_absolute(&mut self, target_register: Register, cycles: i32, mem: &MEM) -> i32 {
-        let (addr1, nc) = self.fetch_byte(cycles, mem);
-        let (addr2, nc2) = self.fetch_byte(nc, mem);
-
-        let addr = (addr1 as Word) | ((addr2 as Word) << 8);
-
-        let (val, nc3) = self.read_byte_from_address(nc2, addr, mem);
-
-
-        self.set_register(target_register, val);
-        self.set_load_flags(val);
-
-        nc3
-    }
-
-    fn load_absolute_reg(&mut self, target_register: Register, add_register: Register, cycles: i32, mem: &MEM) -> i32 {
-        let (addr1, nc) = self.fetch_byte(cycles, mem);
-        let (addr2, nc2) = self.fetch_byte(nc, mem);
-
-        let mut addr = (addr1 as Word) | ((addr2 as Word) << 8);
-
-        addr += match add_register {
-            Register::X => self.x,
-            Register::Y => self.y,
-            _ => { println!("Addressing mode unsupported"); exit(1)}
-        } as Word;
-
-        let (val, nc3) = self.read_byte_from_address(nc2, addr, mem);
-
-
-        self.set_register(target_register, val);
-        self.set_load_flags(val);
-
-        nc3
-    }
-
-    fn set_register(&mut self, target_register: Register, value: Byte) {
-        match target_register {
-            Register::A => self.a = value,
-            Register::X => self.x = value,
-            Register::Y => self.x = value,
-            _ => {
-                println!("Invalid call - Load only supports registers A, X, Y");
-                exit(1)
+                addr
+            },
+            AddressingMode::ZeroPage => {
+                bus.tick(1);
+                self.fetch_byte(bus) as Word
             }
+            AddressingMode::ZeroPageX => {
+                bus.tick(2);
+                (self.fetch_byte(bus) + self.x) as Word
+            }
+            AddressingMode::ZeroPageY => {
+                bus.tick(2);
+                (self.fetch_byte(bus) + self.y) as Word
+            }
+            AddressingMode::Absolute => {
+                bus.tick(2);
+                (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8)
+            }
+            AddressingMode::AbsoluteX => {
+                let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8); 
+                let addr = original_addr.wrapping_add(self.x as Word);
+                
+                if original_addr & 0xFF00 != addr & 0xFF00 {
+                    bus.tick(3);
+                } else {
+                    bus.tick(2);
+                }
+                
+                addr
+            }
+            AddressingMode::AbsoluteY => {
+                let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8);
+                let addr = original_addr.wrapping_add(self.y as Word);
+
+                if original_addr & 0xFF00 != addr & 0xFF00 {
+                    bus.tick(3);
+                } else {
+                    bus.tick(2);
+                }
+
+                addr
+            }
+            AddressingMode::IndexedIndirect => {0x00}
+            AddressingMode::IndirectIndexed => {0x00}
         }
     }
 
-    fn fetch_byte(&mut self, cycles: i32, mem: &MEM) -> (Byte, i32) {
-        let val = mem[self.pc];
-        self.pc += 1;
+    fn fetch_byte<B: Bus>(&mut self, mem: &mut B) -> Byte {
+        let val = mem.read(self.pc);
+        self.pc = self.pc.wrapping_add(1);
 
-        (val, cycles - 1)
-    }
-
-    fn read_byte_from_address(&mut self, cycles: i32, addr: Word, mem: &MEM) -> (Byte, i32) {
-        (mem[addr], cycles - (if addr > 0x0100 {2} else {1}))
+        val
     }
 }
