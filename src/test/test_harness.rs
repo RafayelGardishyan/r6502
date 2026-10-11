@@ -69,7 +69,6 @@ mod json_tests {
     fn test_lda_imm() {
         run_opcode_tests(LDA_IMM);
     }
-
     #[test]
     fn test_lda_zp() {
         run_opcode_tests(LDA_ZP);
@@ -143,5 +142,63 @@ mod json_tests {
     #[test]
     fn test_ldy_abx() {
         run_opcode_tests(LDY_ABX);
+    }
+
+    // STA
+    #[test]
+    fn test_sta_zp() {
+        run_opcode_tests(STA_ZP);
+    }
+    #[test]
+    fn test_sta_zpx() {
+        run_opcode_tests(STA_ZPX);
+    }
+    #[test]
+    fn test_sta_abs() {
+        run_opcode_tests(STA_ABS);
+    }
+    #[test]
+    fn test_sta_abx() {
+        run_opcode_tests(STA_ABX);
+    }
+    #[test]
+    fn test_sta_aby() {
+        run_opcode_tests(STA_ABY);
+    }
+    #[test]
+    fn test_sta_idx() {
+        run_opcode_tests(STA_IDX);
+    }
+    #[test]
+    fn test_sta_idy() {
+        run_opcode_tests(STA_IDY);
+    }
+
+    // STX
+    #[test]
+    fn test_stx_zp() {
+        run_opcode_tests(STX_ZP);
+    }
+    #[test]
+    fn test_stx_zpy() {
+        run_opcode_tests(STX_ZPY);
+    }
+    #[test]
+    fn test_stx_abs() {
+        run_opcode_tests(STX_ABS);
+    }
+
+    // STy
+    #[test]
+    fn test_sty_zp() {
+        run_opcode_tests(STY_ZP);
+    }
+    #[test]
+    fn test_sty_zpx() {
+        run_opcode_tests(STY_ZPX);
+    }
+    #[test]
+    fn test_sty_abs() {
+        run_opcode_tests(STY_ABS);
     }
 }

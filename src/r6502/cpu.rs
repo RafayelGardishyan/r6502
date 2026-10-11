@@ -173,6 +173,26 @@ impl CPU {
                 instructions::LDY_ABS => self.ldy(bus, AddressingMode::Absolute),
                 instructions::LDY_ABX => self.ldy(bus, AddressingMode::AbsoluteX),
 
+                // STA
+                instructions::STA_ZP => self.sta(bus, AddressingMode::ZeroPage),
+                instructions::STA_ZPX => self.sta(bus, AddressingMode::ZeroPageX),
+                instructions::STA_ABS => self.sta(bus, AddressingMode::Absolute),
+                instructions::STA_ABX => self.sta(bus, AddressingMode::AbsoluteX),
+                instructions::STA_ABY => self.sta(bus, AddressingMode::AbsoluteY),
+                instructions::STA_IDX => self.sta(bus, AddressingMode::IndexedIndirect),
+                instructions::STA_IDY => self.sta(bus, AddressingMode::IndirectIndexed),
+
+                // STX
+                instructions::STX_ZP => self.stx(bus, AddressingMode::ZeroPage),
+                instructions::STX_ZPY => self.stx(bus, AddressingMode::ZeroPageY),
+                instructions::STX_ABS => self.stx(bus, AddressingMode::Absolute),
+
+                // STY
+                instructions::STY_ZP => self.sty(bus, AddressingMode::ZeroPage),
+                instructions::STY_ZPX => self.sty(bus, AddressingMode::ZeroPageX),
+                instructions::STY_ABS => self.sty(bus, AddressingMode::Absolute),
+
+
                 _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
             }
 
@@ -183,24 +203,42 @@ impl CPU {
     }
 
     fn lda<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode);
+        let addr = self.resolve_address(bus, addressing_mode, false);
         self.a = bus.read(addr);
         bus.tick(1);
         self.set_nz(self.a)
     }
 
     fn ldx<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode);
+        let addr = self.resolve_address(bus, addressing_mode, false);
         self.x = bus.read(addr);
         bus.tick(1);
         self.set_nz(self.x)
     }
 
     fn ldy<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        let addr = self.resolve_address(bus, addressing_mode);
+        let addr = self.resolve_address(bus, addressing_mode, false);
         self.y = bus.read(addr);
         bus.tick(1);
         self.set_nz(self.y)
+    }
+
+    fn sta<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode, true);
+        bus.write(addr, self.a);
+        bus.tick(1);
+    }
+
+    fn stx<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode, true);
+        bus.write(addr, self.x);
+        bus.tick(1);
+    }
+
+    fn sty<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
+        let addr = self.resolve_address(bus, addressing_mode, true);
+        bus.write(addr, self.y);
+        bus.tick(1);
     }
 
     fn set_nz(&mut self, val: Byte) {
@@ -208,7 +246,7 @@ impl CPU {
         self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
     }
 
-    fn resolve_address<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode) -> Word {
+    fn resolve_address<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode, ignore_page_cross: bool) -> Word {
         match mode {
             AddressingMode::Immediate => {
                 let addr = self.pc;
@@ -235,8 +273,9 @@ impl CPU {
             AddressingMode::AbsoluteX => {
                 let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8); 
                 let addr = original_addr.wrapping_add(self.x as Word);
-                
-                if original_addr & 0xFF00 != addr & 0xFF00 {
+
+                // Page Crossing (ignore page cross for store instructions)
+                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross {
                     bus.tick(3);
                 } else {
                     bus.tick(2);
@@ -248,8 +287,8 @@ impl CPU {
                 let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8);
                 let addr = original_addr.wrapping_add(self.y as Word);
 
-                // Page crossing
-                if original_addr & 0xFF00 != addr & 0xFF00 {
+                // Page crossing (ignore page cross for store instructions)
+                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross{
                     bus.tick(3);
                 } else {
                     bus.tick(2);
@@ -273,8 +312,8 @@ impl CPU {
                 let original_addr = (lsb as Word) | ((msb as Word) << 8);
                 let addr = original_addr.wrapping_add(self.y as Word);
 
-                // Page crossing
-                if original_addr & 0xFF00 != addr & 0xFF00 {
+                // Page crossing (ignore page cross for store instructions)
+                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross {
                     bus.tick(4);
                 } else {
                     bus.tick(3);

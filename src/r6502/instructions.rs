@@ -21,3 +21,22 @@ pub const LDY_ZP: u8 = 0xA4;
 pub const LDY_ZPX: u8 = 0xB4;
 pub const LDY_ABS: u8 = 0xAC;
 pub const LDY_ABX: u8 = 0xBC;
+
+// STA
+pub const STA_ZP: u8 = 0x85;
+pub const STA_ZPX: u8 = 0x95;
+pub const STA_ABS: u8 = 0x8D;
+pub const STA_ABX: u8 = 0x9D;
+pub const STA_ABY: u8 = 0x99;
+pub const STA_IDX: u8 = 0x81;
+pub const STA_IDY: u8 = 0x91;
+
+// STX
+pub const STX_ZP: u8 = 0x86;
+pub const STX_ZPY: u8 = 0x96;
+pub const STX_ABS: u8 = 0x8E;
+
+// STY
+pub const STY_ZP: u8 = 0x84;
+pub const STY_ZPX: u8 = 0x94;
+pub const STY_ABS: u8 = 0x8C;
