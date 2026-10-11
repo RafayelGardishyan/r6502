@@ -7,11 +7,11 @@ pub type Bit = bool;
 pub const ZERO: Bit = false;
 pub const ONE: Bit = true;
 
-const MAX_MEMORY: usize = 1024 * 64; // 64 Kb
+pub const MAX_MEMORY: usize = 1024 * 64; // 64 Kb
 
 pub trait Bus {
     // Memory
-    fn read (&mut self, address: Word) -> Byte;
+    fn read (&self, address: Word) -> Byte;
     fn write (&mut self, address: Word, data: Byte);
 
     // Clock
@@ -24,8 +24,8 @@ pub struct MockRAM {
     clock: usize
 }
 
-#[derive(Clone, Copy)]
-pub struct StatusFlags(Byte);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StatusFlags(pub Byte);
 
 #[derive(Copy, Clone)]
 pub struct CPU {
@@ -70,7 +70,7 @@ impl Default for MockRAM {
 }
 
 impl Bus for MockRAM {
-    fn read(&mut self, address: Word) -> Byte {
+    fn read(&self, address: Word) -> Byte {
         self.data[address as usize]
     }
 
@@ -155,6 +155,9 @@ impl CPU {
                 instructions::LDA_ABS => self.lda(bus, AddressingMode::Absolute),
                 instructions::LDA_ABX => self.lda(bus, AddressingMode::AbsoluteX),
                 instructions::LDA_ABY => self.lda(bus, AddressingMode::AbsoluteY),
+                instructions::LDA_IDX => self.lda(bus, AddressingMode::IndexedIndirect),
+                instructions::LDA_IDY => self.lda(bus, AddressingMode::IndirectIndexed),
+
 
                 // LDX
                 instructions::LDX_IMM => self.ldx(bus, AddressingMode::Immediate),
@@ -173,7 +176,7 @@ impl CPU {
                 _ => todo!()
             }
             
-            cycles_remaining -= bus.clock() - clock_start
+            cycles_remaining = cycles_remaining.wrapping_sub(bus.clock() - clock_start);
         }
 
         cycles - cycles_remaining
@@ -219,11 +222,11 @@ impl CPU {
             }
             AddressingMode::ZeroPageX => {
                 bus.tick(2);
-                (self.fetch_byte(bus) + self.x) as Word
+                self.fetch_byte(bus).wrapping_add(self.x) as Word
             }
             AddressingMode::ZeroPageY => {
                 bus.tick(2);
-                (self.fetch_byte(bus) + self.y) as Word
+                self.fetch_byte(bus).wrapping_add(self.y) as Word
             }
             AddressingMode::Absolute => {
                 bus.tick(2);
@@ -245,6 +248,7 @@ impl CPU {
                 let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8);
                 let addr = original_addr.wrapping_add(self.y as Word);
 
+                // Page crossing
                 if original_addr & 0xFF00 != addr & 0xFF00 {
                     bus.tick(3);
                 } else {
@@ -253,8 +257,33 @@ impl CPU {
 
                 addr
             }
-            AddressingMode::IndexedIndirect => {0x00}
-            AddressingMode::IndirectIndexed => {0x00}
+            AddressingMode::IndexedIndirect => {
+                let starting_addr = (self.fetch_byte(bus)).wrapping_add(self.x);
+                let lsb = bus.read(starting_addr as Word);
+                let msb = bus.read(starting_addr.wrapping_add(1) as Word);
+
+                bus.tick(4);
+
+                (lsb as Word) | ((msb as Word) << 8)
+            }
+            AddressingMode::IndirectIndexed => {
+                let starting_addr = self.fetch_byte(bus);
+                let lsb = bus.read(starting_addr as Word);
+                let msb = bus.read(starting_addr.wrapping_add(1) as Word);
+                let original_addr = (lsb as Word) | ((msb as Word) << 8);
+                let addr = original_addr.wrapping_add(self.y as Word);
+
+                // Page crossing
+                if original_addr & 0xFF00 != addr & 0xFF00 {
+                    bus.tick(4);
+                } else {
+                    bus.tick(5);
+                }
+
+                addr
+
+
+            }
         }
     }
 

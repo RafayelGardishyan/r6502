@@ -1,1 +1,2 @@
-mod lda_tests;
+mod test_loader;
+mod test_harness;
