@@ -22,16 +22,16 @@ pub struct StatusFlags(Byte);
 #[derive(Copy, Clone)]
 pub struct CPU {
     // Registers
-    pc: Word, // Program counter
-    sp: Byte, // Stack pointer
+    pub(crate) pc: Word, // Program counter
+    pub(crate) sp: Byte, // Stack pointer
     pub(crate) a:  Byte, // Accumulator
-    x:  Byte, // Index Register X
-    y:  Byte, // Index Register Y
+    pub(crate) x:  Byte, // Index Register X
+    pub(crate) y:  Byte, // Index Register Y
     pub(crate) sf: StatusFlags // Status Flags
 }
 
 pub enum Register {
-    PC, SP, A, X, Y
+    PC, SP, A, X, Y, NOREG
 }
 
 impl MEM {
@@ -126,10 +126,39 @@ impl CPU {
                 instructions::LDA_IMM  =>
                     cycles_remaining = self.load_immediate(Register::A, cycles_remaining, mem),
                 instructions::LDA_ZP =>
-                    cycles_remaining = self.load_zero_page(Register::A, cycles_remaining, mem),
+                    cycles_remaining = self.load_zero_page(Register::A, Register::NOREG, cycles_remaining, mem),
+                instructions::LDA_ZPX =>
+                    cycles_remaining = self.load_zero_page(Register::A, Register::X, cycles_remaining, mem),
+                instructions::LDA_ABS =>
+                    cycles_remaining = self.load_absolute(Register::A, cycles_remaining, mem),
+                instructions::LDA_ABX =>
+                    cycles_remaining = self.load_absolute_reg(Register::A, Register::X, cycles_remaining, mem),
+                instructions::LDA_ABY =>
+                    cycles_remaining = self.load_absolute_reg(Register::A, Register::Y, cycles_remaining, mem),
 
+                // LDX
                 instructions::LDX_IMM =>
                     cycles_remaining = self.load_immediate(Register::X, cycles_remaining, mem),
+                instructions::LDX_ZP =>
+                    cycles_remaining = self.load_zero_page(Register::X, Register::NOREG, cycles_remaining, mem),
+                instructions::LDX_ZPY =>
+                    cycles_remaining = self.load_zero_page(Register::X, Register::Y, cycles_remaining, mem),
+                instructions::LDX_ABS =>
+                    cycles_remaining = self.load_absolute(Register::X, cycles_remaining, mem),
+                instructions::LDX_ABY =>
+                    cycles_remaining = self.load_absolute_reg(Register::X, Register::Y, cycles_remaining, mem),
+
+                // LDY
+                instructions::LDY_IMM =>
+                    cycles_remaining = self.load_immediate(Register::Y, cycles_remaining, mem),
+                instructions::LDY_ZP =>
+                    cycles_remaining = self.load_zero_page(Register::Y, Register::NOREG, cycles_remaining, mem),
+                instructions::LDY_ZPX =>
+                    cycles_remaining = self.load_zero_page(Register::Y, Register::X, cycles_remaining, mem),
+                instructions::LDY_ABS =>
+                    cycles_remaining = self.load_absolute(Register::Y, cycles_remaining, mem),
+                instructions::LDY_ABX =>
+                    cycles_remaining = self.load_absolute_reg(Register::Y, Register::X, cycles_remaining, mem),
 
                 _ => todo!()
             }
@@ -142,26 +171,73 @@ impl CPU {
         let (val, nc) = self.fetch_byte(cycles, mem);
 
         self.set_register(target_register, val);
-
-        self.sf.set(StatusFlags::ZERO, val == 0);
-        self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
+        self.set_load_flags(val);
 
         nc
     }
 
+    fn set_load_flags(&mut self, val: Byte) {
+        self.sf.set(StatusFlags::ZERO, val == 0);
+        self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
+    }
 
-    fn load_zero_page(&mut self, target_register: Register, cycles: i32, mem: &MEM) -> i32 {
-        let (addr, nc) = self.fetch_byte(cycles, mem);
-        let (val, nc2) = self.read_byte_from_zp_address(nc, addr, mem);
+    fn load_zero_page(&mut self, target_register: Register, add_register: Register, cycles: i32, mem: &MEM) -> i32 {
+        let (mut addr, mut nc) = self.fetch_byte(cycles, mem);
+
+        addr += match add_register {
+            Register::X => self.x,
+            Register::Y => self.y,
+            Register::NOREG => {nc += 1; 0},
+            _ => {println!("Incorrect Instruction, wtf"); exit(0)}
+        };
+
+        nc -= 1;
+
+        let (val, nc2) = self.read_byte_from_address(nc, addr as Word, mem);
 
 
         self.set_register(target_register, val);
-
-        self.sf.set(StatusFlags::ZERO, val == 0);
-        self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
+        self.set_load_flags(val);
 
         nc2
     }
+
+    fn load_absolute(&mut self, target_register: Register, cycles: i32, mem: &MEM) -> i32 {
+        let (addr1, nc) = self.fetch_byte(cycles, mem);
+        let (addr2, nc2) = self.fetch_byte(nc, mem);
+
+        let addr = (addr1 as Word) | ((addr2 as Word) << 8);
+
+        let (val, nc3) = self.read_byte_from_address(nc2, addr, mem);
+
+
+        self.set_register(target_register, val);
+        self.set_load_flags(val);
+
+        nc3
+    }
+
+    fn load_absolute_reg(&mut self, target_register: Register, add_register: Register, cycles: i32, mem: &MEM) -> i32 {
+        let (addr1, nc) = self.fetch_byte(cycles, mem);
+        let (addr2, nc2) = self.fetch_byte(nc, mem);
+
+        let mut addr = (addr1 as Word) | ((addr2 as Word) << 8);
+
+        addr += match add_register {
+            Register::X => self.x,
+            Register::Y => self.y,
+            _ => { println!("Addressing mode unsupported"); exit(1)}
+        } as Word;
+
+        let (val, nc3) = self.read_byte_from_address(nc2, addr, mem);
+
+
+        self.set_register(target_register, val);
+        self.set_load_flags(val);
+
+        nc3
+    }
+
     fn set_register(&mut self, target_register: Register, value: Byte) {
         match target_register {
             Register::A => self.a = value,
@@ -181,7 +257,7 @@ impl CPU {
         (val, cycles - 1)
     }
 
-    fn read_byte_from_zp_address(&mut self, cycles: i32, addr: Byte, mem: &MEM) -> (Byte, i32) {
-        (mem[addr as Word], cycles - 1)
+    fn read_byte_from_address(&mut self, cycles: i32, addr: Word, mem: &MEM) -> (Byte, i32) {
+        (mem[addr], cycles - (if addr > 0x0100 {2} else {1}))
     }
 }

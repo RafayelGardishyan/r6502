@@ -1,5 +1,5 @@
 use crate::r6502::cpu::{CPU, MEM};
-use crate::r6502::instructions::LDA_ZP;
+use crate::r6502::instructions::*;
 
 pub mod r6502;
 mod test;
@@ -11,11 +11,14 @@ fn main() {
     cpu.reset(&mut mem);
 
     // Sample program
-    mem[0xFFFC] = LDA_ZP; // A <- ZP Address
-    mem[0xFFFD] = 0x42; // Address to read from
-    mem[0x0042] = 0x69; // Value to be read
+    mem[0xFFFC] = LDA_ABX; // A <- Absolute addr + X
+    mem[0xFFFD] = 0x41; // Address to read from
+    mem[0xFFFE] = 0x69; // Address to read from
+    mem[0x6942] = 0x67; // Value to be read
 
-    let cycles_taken = cpu.execute(3, &mut mem);
+    cpu.x = 0x01;
+
+    let cycles_taken = cpu.execute(1, &mut mem);
 
     println!("Took {} cycles", cycles_taken);
     println!("Value of CPU.A = 0x{:x}", cpu.a);
