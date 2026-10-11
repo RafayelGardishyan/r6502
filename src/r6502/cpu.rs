@@ -1,3 +1,5 @@
+use std::fmt;
+use std::fmt::Formatter;
 use super::instructions;
 
 pub type Byte = u8;
@@ -20,11 +22,11 @@ pub trait Bus {
 }
 
 pub struct MockRAM {
-    data: [Byte; MAX_MEMORY],
+    pub(crate) data: [Byte; MAX_MEMORY],
     clock: usize
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct StatusFlags(pub Byte);
 
 #[derive(Copy, Clone)]
@@ -52,6 +54,13 @@ pub enum AddressingMode {
     AbsoluteY,
     IndexedIndirect,
     IndirectIndexed
+}
+
+pub enum Operation {
+    And,
+    EOr,
+    OrA,
+    Bit
 }
 
 impl MockRAM {
@@ -112,11 +121,17 @@ impl StatusFlags {
     }
 }
 
+impl fmt::Debug for StatusFlags {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "StatusFlags(0b{:08b})", self.0)
+    }
+}
+
 impl Default for CPU {
     fn default() -> Self {
         CPU {
             pc: 0,
-            sp: 0,
+            sp: 0xFF,
             a:  0,
             x:  0,
             y:  0,
@@ -197,8 +212,26 @@ impl CPU {
                 instructions::TAY => self.tay(bus),
                 instructions::TXA => self.txa(bus),
                 instructions::TYA => self.tya(bus),
+                instructions::TSX => self.tsx(bus),
+                instructions::TXS => self.txs(bus),
 
+                // Stack Operations
+                instructions::PHA => self.pha(bus),
+                instructions::PHP => self.php(bus),
+                instructions::PLA => self.pla(bus),
+                instructions::PLP => self.plp(bus),
 
+                // AND
+                instructions::AND_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::And),
+                instructions::AND_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::And),
+                instructions::AND_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::And),
+                instructions::AND_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::And),
+                instructions::AND_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::And),
+                instructions::AND_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::And),
+                instructions::AND_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::And),
+                instructions::AND_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::And),
+
+                
                 _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
             }
 
@@ -225,8 +258,8 @@ impl CPU {
     }
 
     #[inline]
-    fn transfer_r2r<B: Bus>(&mut self, bus: &mut B, src: Byte) -> Byte{
-        self.set_nz(src);
+    fn transfer_to_reg<B: Bus>(&mut self, bus: &mut B, src: Byte, set_nz: bool) -> Byte{
+        if set_nz {self.set_nz(src);}
         bus.tick(1);
         src
     }
@@ -256,19 +289,78 @@ impl CPU {
     }
 
     fn tax<B: Bus>(&mut self, bus: &mut B) {
-        self.x = self.transfer_r2r(bus, self.a)
+        self.x = self.transfer_to_reg(bus, self.a, true)
     }
 
     fn tay<B: Bus>(&mut self, bus: &mut B) {
-        self.y = self.transfer_r2r(bus, self.a)
+        self.y = self.transfer_to_reg(bus, self.a, true)
     }
 
     fn txa<B: Bus>(&mut self, bus: &mut B) {
-        self.a = self.transfer_r2r(bus, self.x)
+        self.a = self.transfer_to_reg(bus, self.x, true)
     }
 
     fn tya<B: Bus>(&mut self, bus: &mut B) {
-        self.a = self.transfer_r2r(bus, self.y)
+        self.a = self.transfer_to_reg(bus, self.y, true)
+    }
+
+    fn tsx<B: Bus>(&mut self, bus: &mut B) {
+        self.x = self.transfer_to_reg(bus, self.sp, true)
+    }
+
+    fn txs<B: Bus>(&mut self, bus: &mut B) {
+        self.sp = self.transfer_to_reg(bus, self.x, false)
+    }
+
+    fn pha<B: Bus>(&mut self, bus: &mut B) {
+        bus.write(self.get_stack_address(), self.a);
+        bus.tick(1);
+        self.sp = self.sp.wrapping_sub(1);
+        bus.tick(1);
+    }
+
+    fn php<B: Bus>(&mut self, bus: &mut B) {
+        bus.write(self.get_stack_address(), self.sf.0 | 0b00110000); // Bit 5 is not really a register bit and 4 = 1 => pushed from software
+        bus.tick(1);
+        self.sp = self.sp.wrapping_sub(1);
+        bus.tick(1);
+    }
+
+    fn pla<B: Bus>(&mut self, bus: &mut B) {
+        self.sp = self.sp.wrapping_add(1); // 6502 First increments the stack and then retrieves the value (empty stack)
+        bus.tick(1);
+        self.a = self.transfer_to_reg(bus, bus.read(self.get_stack_address()), true);
+        bus.tick(1);
+    }
+
+    fn plp<B: Bus>(&mut self, bus: &mut B) {
+        self.sp = self.sp.wrapping_add(1); // 6502 First increments the stack and then retrieves the value (empty stack)
+        bus.tick(1);
+        let pulled = self.transfer_to_reg(bus, bus.read(self.get_stack_address()), false) & 0b11001111;
+        let old = self.sf.0 & 0b00110000; // Don't read bit 5 and bit 4 - they are not real wow
+        self.sf = StatusFlags(old | pulled);
+        bus.tick(1);
+    }
+
+    fn alu_op<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode, op: Operation) {
+        let addr = self.resolve_address(bus, addressing_mode, false);
+        let val = bus.read(addr);
+
+        bus.tick(1);
+
+        match op {
+            Operation::And => {
+                self.a &= val;
+                self.set_nz(self.a);
+            }
+            Operation::EOr => {}
+            Operation::OrA => {}
+            Operation::Bit => {}
+        }
+    }
+
+    fn get_stack_address(&self) -> Word {
+        (self.sp as Word) | 0x0100
     }
 
     fn set_nz(&mut self, val: Byte) {

@@ -41,8 +41,26 @@ pub const STY_ZP: u8 = 0x84;
 pub const STY_ZPX: u8 = 0x94;
 pub const STY_ABS: u8 = 0x8C;
 
-// Register Transfers (TAX TAY TXA TYA)
+// Register Transfers (TAX TAY TXA TYA TSX TXS)
 pub const TAX: u8 = 0xAA;
 pub const TAY: u8 = 0xA8;
 pub const TXA: u8 = 0x8A;
 pub const TYA: u8 = 0x98;
+pub const TSX: u8 = 0xBA;
+pub const TXS: u8 = 0x9A;
+
+// Stack Operations
+pub const PHA: u8 = 0x48;
+pub const PHP: u8 = 0x08;
+pub const PLA: u8 = 0x68;
+pub const PLP: u8 = 0x28;
+
+// AND
+pub const AND_IMM: u8 = 0x29;
+pub const AND_ZP: u8 = 0x25;
+pub const AND_ZPX: u8 = 0x35;
+pub const AND_ABS: u8 = 0x2D;
+pub const AND_ABX: u8 = 0x3D;
+pub const AND_ABY: u8 = 0x39;
+pub const AND_IDX: u8 = 0x21;
+pub const AND_IDY: u8 = 0x31;

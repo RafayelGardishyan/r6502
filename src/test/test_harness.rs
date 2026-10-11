@@ -1,7 +1,7 @@
 use crate::r6502::cpu::{MockRAM, CPU, MAX_MEMORY, Bus, Word, Byte};
 use super::test_loader::*;
 
-fn compare_cpu(cpu: CPU, cpu_expected: CPU) {
+fn compare_cpu(&cpu: &CPU, &cpu_expected: &CPU) {
     assert_eq!(cpu.pc, cpu_expected.pc,
                "PC mismatch: expected {:#06X}, got {:#06X}",
                cpu_expected.pc, cpu.pc);
@@ -21,24 +21,31 @@ fn compare_cpu(cpu: CPU, cpu_expected: CPU) {
                "SF mismatch");
 }
 
-fn compare_memory(mem: MockRAM, mem_expected: MockRAM) {
-    for i in 0..MAX_MEMORY {
-        assert_eq!(mem.read(i as Word), mem_expected.read(i as Word),
-               "MEM mismatch: address={:#06X} expected {:#04X}, got {:#04X}",
-               i, mem_expected.read(i as Word), mem.read(i as Word));
+fn compare_memory(mem: &MockRAM, mem_expected: &MockRAM) {
+    if mem.data != mem_expected.data {
+        // Make checks faster if they are correct
+        for i in 0..MAX_MEMORY {
+            let actual = mem.read(i as Word);
+            let expected = mem_expected.read(i as Word);
+            assert_eq!(
+                actual, expected,
+                "MEM mismatch: address={:#06X} expected {:#02X}, got {:#02X}",
+                i, expected, actual
+            );
+        }
     }
 }
 
-fn run_single_test(test_case: JsonTestCase) {
-    let (mut cpu, mut mem) = create_cpu_from_state(test_case.initial);
-    let (final_cpu, final_mem) = create_cpu_from_state(test_case.final_state);
+fn run_single_test(test_case: &JsonTestCase) {
+    let (mut cpu, mut mem) = create_cpu_from_state(&test_case.initial);
+    let (final_cpu, final_mem) = create_cpu_from_state(&test_case.final_state);
 
     let expected_cycles = test_case.cycles.len();
 
     let cycles_taken = cpu.execute(expected_cycles, &mut mem);
 
-    compare_cpu(cpu, final_cpu);
-    compare_memory(mem, final_mem);
+    compare_cpu(&cpu, &final_cpu);
+    compare_memory(&mem, &final_mem);
     assert_eq!(cycles_taken, expected_cycles,
     "Cycle mismatch: {} expected while {} were taken",
         expected_cycles, cycles_taken
@@ -54,7 +61,7 @@ fn run_opcode_tests(opcode: Byte) {
     for test_case in test_cases {
         let name = &test_case.name;
         println!("Running {}", name);
-        run_single_test(test_case)
+        run_single_test(&test_case)
     }
 
     println!("Opcode {:#04X}: passed all {} tests.", opcode, total);
@@ -219,4 +226,68 @@ mod json_tests {
     fn test_tya() {
         run_opcode_tests(TYA);
     }
+    #[test]
+    fn test_tsx() {
+        run_opcode_tests(TSX);
+    }
+    #[test]
+    fn test_txs() {
+        run_opcode_tests(TXS);
+    }
+
+    // Stack operations
+    #[test]
+    fn test_pha() {
+        run_opcode_tests(PHA);
+    }
+
+    #[test]
+    fn test_php() {
+        run_opcode_tests(PHP);
+    }
+
+    #[test]
+    fn test_pla() {
+        run_opcode_tests(PLA);
+    }
+
+    #[test]
+    fn test_plp() {
+        run_opcode_tests(PLP);
+    }
+
+    // AND
+    #[test]
+    fn test_and_imm() {
+        run_opcode_tests(AND_IMM);
+    }
+    #[test]
+    fn test_and_zp() {
+        run_opcode_tests(AND_ZP);
+    }
+    #[test]
+    fn test_and_zpx() {
+        run_opcode_tests(AND_ZPX);
+    }
+    #[test]
+    fn test_and_abs() {
+        run_opcode_tests(AND_ABS);
+    }
+    #[test]
+    fn test_and_abx() {
+        run_opcode_tests(AND_ABX);
+    }
+    #[test]
+    fn test_and_aby() {
+        run_opcode_tests(AND_ABY);
+    }
+    #[test]
+    fn test_and_idx() {
+        run_opcode_tests(AND_IDX);
+    }
+    #[test]
+    fn test_and_idy() {
+        run_opcode_tests(AND_IDY);
+    }
+
 }

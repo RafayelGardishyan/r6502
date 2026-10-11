@@ -23,7 +23,7 @@ pub struct JsonTestCase {
     pub cycles: Vec<(u16, u8, String)>,
 }
 
-pub fn create_cpu_from_state(state: CpuState) -> (CPU, MockRAM) {
+pub fn create_cpu_from_state(state: &CpuState) -> (CPU, MockRAM) {
     let mut cpu = CPU::default();
     let mut mem = MockRAM::default();
 
@@ -36,8 +36,8 @@ pub fn create_cpu_from_state(state: CpuState) -> (CPU, MockRAM) {
     cpu.y = state.y;
     cpu.sf = StatusFlags(state.p);
 
-    for (addr, data) in state.ram {
-        mem.write(addr, data);
+    for (addr, data) in &state.ram {
+        mem.write(*addr, *data);
     }
 
     (cpu, mem)
