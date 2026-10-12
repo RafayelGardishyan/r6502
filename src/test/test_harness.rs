@@ -290,4 +290,81 @@ mod json_tests {
         run_opcode_tests(AND_IDY);
     }
 
+    // EOR
+    #[test]
+    fn test_eor_imm() {
+        run_opcode_tests(EOR_IMM);
+    }
+    #[test]
+    fn test_eor_zp() {
+        run_opcode_tests(EOR_ZP);
+    }
+    #[test]
+    fn test_eor_zpx() {
+        run_opcode_tests(EOR_ZPX);
+    }
+    #[test]
+    fn test_eor_abs() {
+        run_opcode_tests(EOR_ABS);
+    }
+    #[test]
+    fn test_eor_abx() {
+        run_opcode_tests(EOR_ABX);
+    }
+    #[test]
+    fn test_eor_aby() {
+        run_opcode_tests(EOR_ABY);
+    }
+    #[test]
+    fn test_eor_idx() {
+        run_opcode_tests(EOR_IDX);
+    }
+    #[test]
+    fn test_eor_idy() {
+        run_opcode_tests(EOR_IDY);
+    }
+
+    // ORA
+    #[test]
+    fn test_ora_imm() {
+        run_opcode_tests(ORA_IMM);
+    }
+    #[test]
+    fn test_ora_zp() {
+        run_opcode_tests(ORA_ZP);
+    }
+    #[test]
+    fn test_ora_zpx() {
+        run_opcode_tests(ORA_ZPX);
+    }
+    #[test]
+    fn test_ora_abs() {
+        run_opcode_tests(ORA_ABS);
+    }
+    #[test]
+    fn test_ora_abx() {
+        run_opcode_tests(ORA_ABX);
+    }
+    #[test]
+    fn test_ora_aby() {
+        run_opcode_tests(ORA_ABY);
+    }
+    #[test]
+    fn test_ora_idx() {
+        run_opcode_tests(ORA_IDX);
+    }
+    #[test]
+    fn test_ora_idy() {
+        run_opcode_tests(ORA_IDY);
+    }
+
+    // BIT
+    #[test]
+    fn test_bit_zp() {
+        run_opcode_tests(BIT_ZP);
+    }
+    #[test]
+    fn test_bit_abs() {
+        run_opcode_tests(BIT_ABS);
+    }
 }

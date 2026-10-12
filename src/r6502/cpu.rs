@@ -58,8 +58,8 @@ pub enum AddressingMode {
 
 pub enum Operation {
     And,
-    EOr,
-    OrA,
+    XOr,
+    Or,
     Bit
 }
 
@@ -231,7 +231,31 @@ impl CPU {
                 instructions::AND_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::And),
                 instructions::AND_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::And),
 
-                
+                // EOR
+                instructions::EOR_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::XOr),
+                instructions::EOR_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::XOr),
+                instructions::EOR_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::XOr),
+                instructions::EOR_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::XOr),
+                instructions::EOR_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::XOr),
+                instructions::EOR_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::XOr),
+                instructions::EOR_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::XOr),
+                instructions::EOR_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::XOr),
+
+                // ORA
+                instructions::ORA_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::Or),
+                instructions::ORA_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::Or),
+                instructions::ORA_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::Or),
+                instructions::ORA_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::Or),
+                instructions::ORA_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::Or),
+                instructions::ORA_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::Or),
+                instructions::ORA_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::Or),
+                instructions::ORA_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::Or),
+
+                // BIT
+                instructions::BIT_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::Bit),
+                instructions::BIT_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::Bit),
+
+
                 _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
             }
 
@@ -353,9 +377,21 @@ impl CPU {
                 self.a &= val;
                 self.set_nz(self.a);
             }
-            Operation::EOr => {}
-            Operation::OrA => {}
-            Operation::Bit => {}
+            Operation::XOr => {
+                self.a ^= val;
+                self.set_nz(self.a);
+            }
+            Operation::Or => {
+                self.a |= val;
+                self.set_nz(self.a);
+            }
+            Operation::Bit => {
+                let tmp = self.a & val;
+                self.sf.set(StatusFlags::ZERO, tmp == 0x00);
+
+                self.sf.set(StatusFlags::OVERFLOW, Self::is_set_bit(val, 6));
+                self.sf.set(StatusFlags::NEGATIVE, Self::is_set_bit(val, 7));
+            }
         }
     }
 
@@ -364,8 +400,12 @@ impl CPU {
     }
 
     fn set_nz(&mut self, val: Byte) {
-        self.sf.set(StatusFlags::ZERO, val == 0);
-        self.sf.set(StatusFlags::NEGATIVE, (1 << 7 & val) > 0);
+        self.sf.set(StatusFlags::ZERO, val == 0x00);
+        self.sf.set(StatusFlags::NEGATIVE, Self::is_set_bit(val, 7));
+    }
+
+    fn is_set_bit(val: Byte, bit: usize) -> bool {
+        (1 << bit & val) > 0
     }
 
     fn resolve_address<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode, ignore_page_cross: bool) -> Word {
