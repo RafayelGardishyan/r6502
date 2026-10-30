@@ -1,3 +1,16 @@
+#[derive(Clone, Copy)]
+pub enum Instruction {
+    LDA, LDX, LDY,
+    STA, STX, STY,
+    TAX, TAY, TXA, TYA,
+    TSX, TXS,
+    PHA, PHP, PLA, PLP,
+    AND, EOR, ORA,
+    BIT,
+    ADC,
+    NOP
+}
+
 // LDA
 pub const LDA_IMM: u8 = 0xA9;
 pub const LDA_ZP: u8  = 0xA5;
@@ -88,3 +101,13 @@ pub const ORA_IDY: u8 = 0x11;
 // BIT
 pub const BIT_ZP: u8 = 0x24;
 pub const BIT_ABS: u8 = 0x2C;
+
+// ADC
+pub const ADC_IMM: u8 = 0x69;
+pub const ADC_ZP: u8 = 0x65;
+pub const ADC_ZPX: u8 = 0x75;
+pub const ADC_ABS: u8 = 0x6D;
+pub const ADC_ABX: u8 = 0x7D;
+pub const ADC_ABY: u8 = 0x79;
+pub const ADC_IDX: u8 = 0x61;
+pub const ADC_IDY: u8 = 0x71;

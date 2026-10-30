@@ -1,6 +1,6 @@
+use crate::r6502::instructions::Instruction;
 use std::fmt;
 use std::fmt::Formatter;
-use super::instructions;
 
 pub type Byte = u8;
 pub type Word = u16;
@@ -10,20 +10,21 @@ pub const ZERO: Bit = false;
 pub const ONE: Bit = true;
 
 pub const MAX_MEMORY: usize = 1024 * 64; // 64 Kb
+pub type EmulatorResult<T> = std::result::Result<T, &'static str>;
 
 pub trait Bus {
     // Memory
-    fn read (&self, address: Word) -> Byte;
-    fn write (&mut self, address: Word, data: Byte);
+    fn read(&self, address: Word) -> EmulatorResult<Byte>;
+    fn write(&mut self, address: Word, data: Byte) -> EmulatorResult<()>;
 
     // Clock
-    fn tick(&mut self, cycles: usize) -> usize;
-    fn clock(&self) -> usize;
+    fn tick(&mut self, cycles: usize) -> EmulatorResult<usize>;
+    fn clock(&self) -> EmulatorResult<usize>;
 }
 
 pub struct MockRAM {
     pub(crate) data: [Byte; MAX_MEMORY],
-    clock: usize
+    clock: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,18 +33,34 @@ pub struct StatusFlags(pub Byte);
 #[derive(Copy, Clone)]
 pub struct CPU {
     // Registers
-    pub(crate) pc: Word, // Program counter
-    pub(crate) sp: Byte, // Stack pointer
-    pub(crate) a:  Byte, // Accumulator
-    pub(crate) x:  Byte, // Index Register X
-    pub(crate) y:  Byte, // Index Register Y
+    pub(crate) pc: Word,        // Program counter
+    pub(crate) sp: Byte,        // Stack pointer
+    pub(crate) a: Byte,         // Accumulator
+    pub(crate) x: Byte,         // Index Register X
+    pub(crate) y: Byte,         // Index Register Y
     pub(crate) sf: StatusFlags, // Status Flags
+
+    // Cycle stepped
+    cycle: usize,                            // Current instruction cycle
+    exec_cycle: usize,                       // Current execution cycle
+    current_instruction: Instruction,        // What instruction are we executing
+    current_addressing_mode: AddressingMode, // What addressing mode does the instruction have
+
+    // Hidden state
+    current_address: Word, // Current address assembled from memory operations
+    pointer: Byte,         // Temporary address register
+    address_ready: bool,   // Flag to indicate address is done to read
 }
 
 pub enum Register {
-    PC, SP, A, X, Y
+    PC,
+    SP,
+    A,
+    X,
+    Y,
 }
 
+#[derive(Clone, Copy, PartialEq)]
 pub enum AddressingMode {
     Immediate,
     ZeroPage,
@@ -53,14 +70,16 @@ pub enum AddressingMode {
     AbsoluteX,
     AbsoluteY,
     IndexedIndirect,
-    IndirectIndexed
+    IndirectIndexed,
+    Accumulator,
 }
 
 pub enum Operation {
     And,
     XOr,
     Or,
-    Bit
+    Bit,
+    AddCarry,
 }
 
 impl MockRAM {
@@ -73,43 +92,49 @@ impl Default for MockRAM {
     fn default() -> Self {
         MockRAM {
             data: [0; MAX_MEMORY],
-            clock: 0
+            clock: 0,
         }
     }
 }
 
 impl Bus for MockRAM {
-    fn read(&self, address: Word) -> Byte {
-        self.data[address as usize]
+    fn read(&self, address: Word) -> EmulatorResult<Byte> {
+        Ok(self.data[address as usize])
     }
 
-    fn write(&mut self, address: Word, data: Byte) {
+    fn write(&mut self, address: Word, data: Byte) -> EmulatorResult<()> {
         self.data[address as usize] = data;
+
+        Ok(())
     }
 
-    fn tick(&mut self, cycles: usize) -> usize {
+    fn tick(&mut self, cycles: usize) -> EmulatorResult<usize> {
         self.clock += cycles;
 
-        self.clock
+        Ok(self.clock)
     }
 
-    fn clock(&self) -> usize {
-        self.clock
+    fn clock(&self) -> EmulatorResult<usize> {
+        Ok(self.clock)
     }
 }
 
 impl StatusFlags {
-    pub const CARRY: u8     = 1 << 0;
-    pub const ZERO: u8      = 1 << 1;
+    pub const CARRY: u8 = 1 << 0;
+    pub const ZERO: u8 = 1 << 1;
     pub const INTERRUPT: u8 = 1 << 2;
-    pub const DECIMAL: u8   = 1 << 3;
-    pub const BREAK: u8     = 1 << 4;
-    pub const UNUSED: u8    = 1 << 5;
-    pub const OVERFLOW: u8  = 1 << 6;
-    pub const NEGATIVE: u8  = 1 << 7;
+    pub const DECIMAL: u8 = 1 << 3;
+    pub const BREAK: u8 = 1 << 4;
+    pub const UNUSED: u8 = 1 << 5;
+    pub const OVERFLOW: u8 = 1 << 6;
+    pub const NEGATIVE: u8 = 1 << 7;
 
     pub fn set(&mut self, flag: u8, value: Bit) {
-        if value { self.0 |= flag; } else { self.0 &= !flag; }
+        if value {
+            self.0 |= flag;
+        } else {
+            self.0 &= !flag;
+        }
     }
 
     pub fn get(&self, flag: u8) -> Bit {
@@ -132,10 +157,17 @@ impl Default for CPU {
         CPU {
             pc: 0,
             sp: 0xFF,
-            a:  0,
-            x:  0,
-            y:  0,
+            a: 0,
+            x: 0,
+            y: 0,
             sf: StatusFlags(0),
+            cycle: 0,
+            exec_cycle: 0,
+            current_instruction: Instruction::NOP,
+            current_addressing_mode: AddressingMode::Immediate,
+            current_address: 0,
+            pointer: 0,
+            address_ready: false,
         }
     }
 }
@@ -151,252 +183,123 @@ impl CPU {
         self.y = 0;
         self.a = 0;
         self.sf.zero();
+
+        // Reset state
+        self.cycle = 0;
+        self.exec_cycle = 0;
+        self.current_instruction = Instruction::NOP;
+        self.current_addressing_mode = AddressingMode::Immediate;
+        self.current_address = 0;
+        self.pointer = 0;
+        self.address_ready = false;
+
         mem.init();
     }
 
-    pub fn execute<B: Bus>(&mut self, cycles: usize, bus: &mut B) -> usize {
+    pub fn execute<B: Bus>(&mut self, cycles: usize, bus: &mut B) -> EmulatorResult<usize> {
         let mut cycles_remaining = cycles;
 
         while cycles_remaining > 0 {
-            let clock_start = bus.clock();
-            let instruction = self.fetch_byte(bus);
-            bus.tick(1);
-
-            match instruction {
-                // LDA
-                instructions::LDA_IMM  => self.lda(bus, AddressingMode::Immediate),
-                instructions::LDA_ZP => self.lda(bus, AddressingMode::ZeroPage),
-                instructions::LDA_ZPX => self.lda(bus, AddressingMode::ZeroPageX),
-                instructions::LDA_ABS => self.lda(bus, AddressingMode::Absolute),
-                instructions::LDA_ABX => self.lda(bus, AddressingMode::AbsoluteX),
-                instructions::LDA_ABY => self.lda(bus, AddressingMode::AbsoluteY),
-                instructions::LDA_IDX => self.lda(bus, AddressingMode::IndexedIndirect),
-                instructions::LDA_IDY => self.lda(bus, AddressingMode::IndirectIndexed),
-
-
-                // LDX
-                instructions::LDX_IMM => self.ldx(bus, AddressingMode::Immediate),
-                instructions::LDX_ZP => self.ldx(bus, AddressingMode::ZeroPage),
-                instructions::LDX_ZPY => self.ldx(bus, AddressingMode::ZeroPageY),
-                instructions::LDX_ABS => self.ldx(bus, AddressingMode::Absolute),
-                instructions::LDX_ABY => self.ldx(bus, AddressingMode::AbsoluteY),
-
-                // LDY
-                instructions::LDY_IMM => self.ldy(bus, AddressingMode::Immediate),
-                instructions::LDY_ZP => self.ldy(bus, AddressingMode::ZeroPage),
-                instructions::LDY_ZPX => self.ldy(bus, AddressingMode::ZeroPageX),
-                instructions::LDY_ABS => self.ldy(bus, AddressingMode::Absolute),
-                instructions::LDY_ABX => self.ldy(bus, AddressingMode::AbsoluteX),
-
-                // STA
-                instructions::STA_ZP => self.sta(bus, AddressingMode::ZeroPage),
-                instructions::STA_ZPX => self.sta(bus, AddressingMode::ZeroPageX),
-                instructions::STA_ABS => self.sta(bus, AddressingMode::Absolute),
-                instructions::STA_ABX => self.sta(bus, AddressingMode::AbsoluteX),
-                instructions::STA_ABY => self.sta(bus, AddressingMode::AbsoluteY),
-                instructions::STA_IDX => self.sta(bus, AddressingMode::IndexedIndirect),
-                instructions::STA_IDY => self.sta(bus, AddressingMode::IndirectIndexed),
-
-                // STX
-                instructions::STX_ZP => self.stx(bus, AddressingMode::ZeroPage),
-                instructions::STX_ZPY => self.stx(bus, AddressingMode::ZeroPageY),
-                instructions::STX_ABS => self.stx(bus, AddressingMode::Absolute),
-
-                // STY
-                instructions::STY_ZP => self.sty(bus, AddressingMode::ZeroPage),
-                instructions::STY_ZPX => self.sty(bus, AddressingMode::ZeroPageX),
-                instructions::STY_ABS => self.sty(bus, AddressingMode::Absolute),
-
-                // Register Transfers
-                instructions::TAX => self.tax(bus),
-                instructions::TAY => self.tay(bus),
-                instructions::TXA => self.txa(bus),
-                instructions::TYA => self.tya(bus),
-                instructions::TSX => self.tsx(bus),
-                instructions::TXS => self.txs(bus),
-
-                // Stack Operations
-                instructions::PHA => self.pha(bus),
-                instructions::PHP => self.php(bus),
-                instructions::PLA => self.pla(bus),
-                instructions::PLP => self.plp(bus),
-
-                // AND
-                instructions::AND_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::And),
-                instructions::AND_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::And),
-                instructions::AND_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::And),
-                instructions::AND_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::And),
-                instructions::AND_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::And),
-                instructions::AND_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::And),
-                instructions::AND_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::And),
-                instructions::AND_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::And),
-
-                // EOR
-                instructions::EOR_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::XOr),
-                instructions::EOR_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::XOr),
-                instructions::EOR_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::XOr),
-                instructions::EOR_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::XOr),
-                instructions::EOR_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::XOr),
-                instructions::EOR_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::XOr),
-                instructions::EOR_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::XOr),
-                instructions::EOR_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::XOr),
-
-                // ORA
-                instructions::ORA_IMM => self.alu_op(bus, AddressingMode::Immediate, Operation::Or),
-                instructions::ORA_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::Or),
-                instructions::ORA_ZPX => self.alu_op(bus, AddressingMode::ZeroPageX, Operation::Or),
-                instructions::ORA_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::Or),
-                instructions::ORA_ABX => self.alu_op(bus, AddressingMode::AbsoluteX, Operation::Or),
-                instructions::ORA_ABY => self.alu_op(bus, AddressingMode::AbsoluteY, Operation::Or),
-                instructions::ORA_IDX => self.alu_op(bus, AddressingMode::IndexedIndirect, Operation::Or),
-                instructions::ORA_IDY => self.alu_op(bus, AddressingMode::IndirectIndexed, Operation::Or),
-
-                // BIT
-                instructions::BIT_ZP => self.alu_op(bus, AddressingMode::ZeroPage, Operation::Bit),
-                instructions::BIT_ABS => self.alu_op(bus, AddressingMode::Absolute, Operation::Bit),
-
-
-                _ => panic!("Instruction not implemented: {:#04X} at PC={:#06X}", instruction, self.pc)
-            }
-
-            cycles_remaining = cycles_remaining.wrapping_sub(bus.clock() - clock_start);
+            self.execute_cycle(bus).expect("Error while executing");
+            cycles_remaining -= 1;
         }
 
-        cycles - cycles_remaining
+        Ok(cycles - cycles_remaining)
     }
 
-    #[inline]
-    fn load_register<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode) -> Byte {
-        let addr = self.resolve_address(bus, mode, false);
-        let val = bus.read(addr);
-        bus.tick(1);
-        self.set_nz(val);
-        val
-    }
-
-    #[inline]
-    fn store_register<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode, val: Byte) {
-        let addr = self.resolve_address(bus, mode, true);
-        bus.write(addr, val);
-        bus.tick(1);
-    }
-
-    #[inline]
-    fn transfer_to_reg<B: Bus>(&mut self, bus: &mut B, src: Byte, set_nz: bool) -> Byte{
-        if set_nz {self.set_nz(src);}
-        bus.tick(1);
-        src
-    }
-
-    fn lda<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        self.a = self.load_register(bus, addressing_mode);
-    }
-
-    fn ldx<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        self.x = self.load_register(bus, addressing_mode);
-    }
-
-    fn ldy<B: Bus>(&mut self, bus : &mut B, addressing_mode: AddressingMode) {
-        self.y = self.load_register(bus, addressing_mode);
-    }
-
-    fn sta<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        self.store_register(bus, addressing_mode, self.a);
-    }
-
-    fn stx<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        self.store_register(bus, addressing_mode, self.x);
-    }
-
-    fn sty<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode) {
-        self.store_register(bus, addressing_mode, self.y);
-    }
-
-    fn tax<B: Bus>(&mut self, bus: &mut B) {
-        self.x = self.transfer_to_reg(bus, self.a, true)
-    }
-
-    fn tay<B: Bus>(&mut self, bus: &mut B) {
-        self.y = self.transfer_to_reg(bus, self.a, true)
-    }
-
-    fn txa<B: Bus>(&mut self, bus: &mut B) {
-        self.a = self.transfer_to_reg(bus, self.x, true)
-    }
-
-    fn tya<B: Bus>(&mut self, bus: &mut B) {
-        self.a = self.transfer_to_reg(bus, self.y, true)
-    }
-
-    fn tsx<B: Bus>(&mut self, bus: &mut B) {
-        self.x = self.transfer_to_reg(bus, self.sp, true)
-    }
-
-    fn txs<B: Bus>(&mut self, bus: &mut B) {
-        self.sp = self.transfer_to_reg(bus, self.x, false)
-    }
-
-    fn pha<B: Bus>(&mut self, bus: &mut B) {
-        bus.write(self.get_stack_address(), self.a);
-        bus.tick(1);
-        self.sp = self.sp.wrapping_sub(1);
-        bus.tick(1);
-    }
-
-    fn php<B: Bus>(&mut self, bus: &mut B) {
-        bus.write(self.get_stack_address(), self.sf.0 | 0b00110000); // Bit 5 is not really a register bit and 4 = 1 => pushed from software
-        bus.tick(1);
-        self.sp = self.sp.wrapping_sub(1);
-        bus.tick(1);
-    }
-
-    fn pla<B: Bus>(&mut self, bus: &mut B) {
-        self.sp = self.sp.wrapping_add(1); // 6502 First increments the stack and then retrieves the value (empty stack)
-        bus.tick(1);
-        self.a = self.transfer_to_reg(bus, bus.read(self.get_stack_address()), true);
-        bus.tick(1);
-    }
-
-    fn plp<B: Bus>(&mut self, bus: &mut B) {
-        self.sp = self.sp.wrapping_add(1); // 6502 First increments the stack and then retrieves the value (empty stack)
-        bus.tick(1);
-        let pulled = self.transfer_to_reg(bus, bus.read(self.get_stack_address()), false) & 0b11001111;
-        let old = self.sf.0 & 0b00110000; // Don't read bit 5 and bit 4 - they are not real wow
-        self.sf = StatusFlags(old | pulled);
-        bus.tick(1);
-    }
-
-    fn alu_op<B: Bus>(&mut self, bus: &mut B, addressing_mode: AddressingMode, op: Operation) {
-        let addr = self.resolve_address(bus, addressing_mode, false);
-        let val = bus.read(addr);
-
-        bus.tick(1);
-
-        match op {
-            Operation::And => {
-                self.a &= val;
-                self.set_nz(self.a);
+    pub fn execute_cycle<B: Bus>(&mut self, bus: &mut B) -> EmulatorResult<()> {
+        match (self.cycle, self.address_ready) {
+            (0, _) => {
+                self.fetch_and_decode(bus)
+                    .expect("CPU Error: failed to decode");
+                self.cycle += 1;
+                self.exec_cycle = 0;
             }
-            Operation::XOr => {
-                self.a ^= val;
-                self.set_nz(self.a);
+            (_, false) => {
+                self.resolve_address(bus)
+                    .expect("CPU Error: address resolution failed");
+                self.cycle += 1;
             }
-            Operation::Or => {
-                self.a |= val;
-                self.set_nz(self.a);
-            }
-            Operation::Bit => {
-                let tmp = self.a & val;
-                self.sf.set(StatusFlags::ZERO, tmp == 0x00);
-
-                self.sf.set(StatusFlags::OVERFLOW, Self::is_set_bit(val, 6));
-                self.sf.set(StatusFlags::NEGATIVE, Self::is_set_bit(val, 7));
+            (_, true) => {
+                self.execute_operation(bus)
+                    .expect("CPU Error: execution failed");
+                self.exec_cycle += 1;
             }
         }
+
+        Ok(())
     }
 
-    fn get_stack_address(&self) -> Word {
-        (self.sp as Word) | 0x0100
+    pub fn execute_operation<B: Bus>(&mut self, bus: &mut B) -> EmulatorResult<()> {
+        match self.current_instruction {
+            Instruction::LDA => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.a = bus.read(self.current_address)?;
+                self.set_nz(self.a);
+
+                self.finalise_execution();
+            }
+            Instruction::LDX => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.x = bus.read(self.current_address)?;
+                self.set_nz(self.x);
+
+                self.finalise_execution();
+            }
+            Instruction::LDY => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.y = bus.read(self.current_address)?;
+                self.set_nz(self.y);
+
+                self.finalise_execution();
+            }
+            Instruction::STA => {
+                assert_eq!(self.exec_cycle, 0);
+
+                bus.write(self.current_address, self.a)?;
+
+                self.finalise_execution();
+            }
+            Instruction::STX => {
+                assert_eq!(self.exec_cycle, 0);
+
+                bus.write(self.current_address, self.x)?;
+
+                self.finalise_execution();
+            }
+            Instruction::STY => {
+                assert_eq!(self.exec_cycle, 0);
+
+                bus.write(self.current_address, self.y)?;
+
+                self.finalise_execution();
+            }
+            Instruction::TAX => {}
+            Instruction::TAY => {}
+            Instruction::TXA => {}
+            Instruction::TYA => {}
+            Instruction::TSX => {}
+            Instruction::TXS => {}
+            Instruction::PHA => {}
+            Instruction::PHP => {}
+            Instruction::PLA => {}
+            Instruction::PLP => {}
+            Instruction::AND => {}
+            Instruction::EOR => {}
+            Instruction::ORA => {}
+            Instruction::BIT => {}
+            Instruction::ADC => {}
+            Instruction::NOP => {}
+        }
+
+        Ok(())
+    }
+
+    fn is_set_bit(val: Byte, bit: usize) -> bool {
+        val & (1 << bit) != 0
     }
 
     fn set_nz(&mut self, val: Byte) {
@@ -404,94 +307,293 @@ impl CPU {
         self.sf.set(StatusFlags::NEGATIVE, Self::is_set_bit(val, 7));
     }
 
-    fn is_set_bit(val: Byte, bit: usize) -> bool {
-        (1 << bit & val) > 0
-    }
-
-    fn resolve_address<B: Bus>(&mut self, bus: &mut B, mode: AddressingMode, ignore_page_cross: bool) -> Word {
-        match mode {
+    fn resolve_address<B: Bus>(&mut self, bus: &mut B) -> EmulatorResult<()> {
+        match self.current_addressing_mode {
             AddressingMode::Immediate => {
-                let addr = self.pc;
-                self.pc = self.pc.wrapping_add(1);
-
-                addr
+                return Err("Address resolution error: Immediates handled in decode");
+            }
+            AddressingMode::ZeroPage => match self.cycle {
+                1 => {
+                    self.current_address = bus.read(self.pc).expect("Memory read error") as Word;
+                    self.increment_pc();
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
             },
-            AddressingMode::ZeroPage => {
-                bus.tick(1);
-                self.fetch_byte(bus) as Word
-            }
-            AddressingMode::ZeroPageX => {
-                bus.tick(2);
-                self.fetch_byte(bus).wrapping_add(self.x) as Word
-            }
-            AddressingMode::ZeroPageY => {
-                bus.tick(2);
-                self.fetch_byte(bus).wrapping_add(self.y) as Word
-            }
-            AddressingMode::Absolute => {
-                bus.tick(2);
-                (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8)
-            }
-            AddressingMode::AbsoluteX => {
-                let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8); 
-                let addr = original_addr.wrapping_add(self.x as Word);
-
-                // Page Crossing (ignore page cross for store instructions)
-                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross {
-                    bus.tick(3);
-                } else {
-                    bus.tick(2);
+            AddressingMode::ZeroPageX => match self.cycle {
+                1 => {
+                    self.pointer = bus.read(self.pc).expect("Memory read error");
+                    self.increment_pc();
                 }
-                
-                addr
-            }
-            AddressingMode::AbsoluteY => {
-                let original_addr = (self.fetch_byte(bus) as Word) | ((self.fetch_byte(bus) as Word) << 8);
-                let addr = original_addr.wrapping_add(self.y as Word);
-
-                // Page crossing (ignore page cross for store instructions)
-                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross{
-                    bus.tick(3);
-                } else {
-                    bus.tick(2);
+                2 => {
+                    self.current_address = self.pointer.wrapping_add(self.x) as Word;
+                    self.address_ready = true;
                 }
-
-                addr
-            }
-            AddressingMode::IndexedIndirect => {
-                let starting_addr = (self.fetch_byte(bus)).wrapping_add(self.x);
-                let lsb = bus.read(starting_addr as Word);
-                let msb = bus.read(starting_addr.wrapping_add(1) as Word);
-
-                bus.tick(4);
-
-                (lsb as Word) | ((msb as Word) << 8)
-            }
-            AddressingMode::IndirectIndexed => {
-                let starting_addr = self.fetch_byte(bus);
-                let lsb = bus.read(starting_addr as Word);
-                let msb = bus.read(starting_addr.wrapping_add(1) as Word);
-                let original_addr = (lsb as Word) | ((msb as Word) << 8);
-                let addr = original_addr.wrapping_add(self.y as Word);
-
-                // Page crossing (ignore page cross for store instructions)
-                if (original_addr & 0xFF00 != addr & 0xFF00) || ignore_page_cross {
-                    bus.tick(4);
-                } else {
-                    bus.tick(3);
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::ZeroPageY => match self.cycle {
+                1 => {
+                    self.pointer = bus.read(self.pc).expect("Memory read error");
+                    self.increment_pc()
                 }
+                2 => {
+                    self.current_address = self.pointer.wrapping_add(self.y) as Word;
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::Absolute => match self.cycle {
+                1 => {
+                    self.current_address = bus.read(self.pc).expect("Memory read error") as Word;
+                    self.increment_pc();
+                }
+                2 => {
+                    self.current_address |=
+                        (bus.read(self.pc).expect("Memory read error") as Word) << 8;
+                    self.increment_pc();
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::AbsoluteX => match self.cycle {
+                1 => {
+                    self.current_address = bus.read(self.pc).expect("Memory read error") as Word;
+                    self.increment_pc();
+                }
+                2 => {
+                    self.current_address |=
+                        (bus.read(self.pc).expect("Memory read error") as Word) << 8;
+                    self.increment_pc();
 
-                addr
+                    let new_address = self.current_address.wrapping_add(self.x as Word);
 
+                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
 
-            }
+                    self.current_address = new_address;
+                }
+                3 => {
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::AbsoluteY => match self.cycle {
+                1 => {
+                    self.current_address = bus.read(self.pc).expect("Memory read error") as Word;
+                    self.increment_pc();
+                }
+                2 => {
+                    self.current_address |=
+                        (bus.read(self.pc).expect("Memory read error") as Word) << 8;
+                    self.increment_pc();
+
+                    let new_address = self.current_address.wrapping_add(self.y as Word);
+
+                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
+
+                    self.current_address = new_address;
+                }
+                3 => {
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::IndexedIndirect => match self.cycle {
+                1 => {
+                    self.pointer = bus.read(self.pc).expect("Memory read error");
+                    self.increment_pc();
+                }
+                2 => {
+                    self.pointer = self.pointer.wrapping_add(self.x);
+                }
+                3 => {
+                    self.current_address =
+                        bus.read(self.pointer as Word).expect("Memory read error") as Word;
+                }
+                4 => {
+                    self.current_address |=
+                        (bus.read((self.pointer + 1) as Word).expect("Memory read error") as Word) << 8;
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::IndirectIndexed => match self.cycle {
+                1 => {
+                    self.pointer = bus.read(self.pc).expect("Memory read error");
+                    self.increment_pc();
+                }
+                2 => {
+                    self.current_address =
+                        bus.read(self.pointer as Word).expect("Memory read error") as Word;
+                }
+                3 => {
+                    self.current_address |=
+                        (bus.read((self.pointer + 1) as Word).expect("Memory read error") as Word) << 8;
+
+                    let new_address = self.current_address.wrapping_add(self.y as Word);
+
+                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
+
+                    self.current_address = new_address;
+                }
+                4 => {
+                    self.address_ready = true;
+                }
+                _ => return Err("Address resolution error: invalid cycle for addressing mode"),
+            },
+            AddressingMode::Accumulator => return Err("Not implemented yet"),
         }
+
+        Ok(())
     }
 
-    fn fetch_byte<B: Bus>(&mut self, mem: &mut B) -> Byte {
-        let val = mem.read(self.pc);
-        self.pc = self.pc.wrapping_add(1);
+    fn increment_pc(&mut self) {
+        self.pc = self.pc.wrapping_add(1)
+    }
 
-        val
+    fn fetch_and_decode<B: Bus>(&mut self, bus: &mut B) -> EmulatorResult<()> {
+        let opcode = bus.read(self.pc)?;
+
+        let cc = opcode & 0x03;
+        let bbb = (opcode >> 2) & 0x07;
+        let aaa = (opcode >> 5) & 0x07;
+
+        // 0b10011001
+
+        self.current_addressing_mode = match cc {
+            0b01 => match bbb {
+                0b000 => AddressingMode::IndexedIndirect,
+                0b001 => AddressingMode::ZeroPage,
+                0b010 => AddressingMode::Immediate,
+                0b011 => AddressingMode::Absolute,
+                0b100 => AddressingMode::IndirectIndexed,
+                0b101 => AddressingMode::ZeroPageX,
+                0b110 => AddressingMode::AbsoluteY,
+                0b111 => AddressingMode::AbsoluteX,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong addressing mode",
+                    );
+                }
+            },
+            0b10 => match bbb {
+                0b000 => AddressingMode::Immediate,
+                0b001 => AddressingMode::ZeroPage,
+                0b010 => AddressingMode::Accumulator,
+                0b011 => AddressingMode::Absolute,
+                0b101 => AddressingMode::ZeroPageX,
+                0b111 => AddressingMode::AbsoluteX,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong addressing mode",
+                    );
+                }
+            },
+            0b00 => match bbb {
+                0b000 => AddressingMode::Immediate,
+                0b001 => AddressingMode::ZeroPage,
+                0b011 => AddressingMode::Absolute,
+                0b101 => AddressingMode::ZeroPageX,
+                0b111 => AddressingMode::AbsoluteX,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong addressing mode",
+                    );
+                }
+            },
+            _ => {
+                return Err(
+                    "Encountered malformed instruction while decoding: wrong instruction group",
+                );
+            }
+        };
+
+        self.current_instruction = match cc {
+            0b01 => match aaa {
+                0b000 => Instruction::ORA,
+                0b001 => Instruction::AND,
+                0b010 => Instruction::EOR,
+                0b011 => Instruction::ADC,
+                0b100 => Instruction::STA,
+                0b101 => Instruction::LDA,
+                // todo implement
+                // 0b110 => Instruction::CMP,
+                // 0b111 => Instruction::SBC,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong operation",
+                    );
+                }
+            },
+            0b10 => match aaa {
+                // todo implement
+                // 0b000 => Instruction::ASL,
+                // 0b001 => Instruction::ROL,
+                // 0b010 => Instruction::LSR,
+                // 0b011 => Instruction::ROR,
+                0b100 => Instruction::STX,
+                0b101 => Instruction::LDX,
+                // todo implement
+                // 0b110 => Instruction::DEC,
+                // 0b111 => Instruction::INC,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong operation",
+                    );
+                }
+            },
+            0b00 => match aaa {
+                0b001 => Instruction::BIT,
+                // todo implement
+                // 0b010 => Instruction::JMP,
+                // 0b011 => Instruction::JMP,
+                0b100 => Instruction::STY,
+                0b101 => Instruction::LDY,
+                // todo implement
+                // 0b110 => Instruction::CPY,
+                // 0b111 => Instruction::CPX,
+                _ => {
+                    return Err(
+                        "Encountered malformed instruction while decoding: wrong operation",
+                    );
+                }
+            },
+            _ => {
+                return Err(
+                    "Encountered malformed instruction while decoding: wrong instruction group",
+                );
+            }
+        };
+
+        // Exceptions
+        match (self.current_instruction, self.current_addressing_mode) {
+            (Instruction::LDX, AddressingMode::ZeroPageX) => {
+                self.current_addressing_mode = AddressingMode::ZeroPageY
+            }
+            (Instruction::STX, AddressingMode::ZeroPageX) => {
+                self.current_addressing_mode = AddressingMode::ZeroPageY
+            }
+            (Instruction::LDX, AddressingMode::AbsoluteX) => {
+                self.current_addressing_mode = AddressingMode::AbsoluteY
+            }
+            _ => {}
+        }
+
+        // Increment PC
+        self.increment_pc();
+
+        // We don't waste cycles on immediate address resolution - we already have it
+        if self.current_addressing_mode == AddressingMode::Immediate {
+            self.current_address = self.pc;
+            self.increment_pc();
+
+            self.address_ready = true;
+        }
+
+        Ok(())
+    }
+
+    fn finalise_execution(&mut self) {
+        self.cycle = 0;
+        self.address_ready = false;
     }
 }

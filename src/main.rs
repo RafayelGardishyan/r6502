@@ -11,14 +11,17 @@ fn main() {
     cpu.reset(&mut mem);
 
     // Sample program
-    mem.write(0xFFFC, LDA_ABX); // A <- Absolute addr + X
-    mem.write(0xFFFD, 0x41); // Address to read from
-    mem.write(0xFFFE, 0x69); // Address to read from
-    mem.write(0x6942, 0x67); // Value to be read
+    mem.write(0xFFFC, LDA_ABX).expect("Error writing"); // A <- Absolute addr + X
+    mem.write(0xFFFD, 0x41).expect("Error writing"); // Address to read from
+    mem.write(0xFFFE, 0x69).expect("Error writing"); // Address to read from
+    mem.write(0x6942, 0x67).expect("Error writing"); // Value to be read
 
     cpu.x = 0x01;
 
-    let cycles_taken = cpu.execute(1, &mut mem);
+    let cycles_taken = match cpu.execute(1, &mut mem) {
+        Ok(v) => v,
+        _ => 0
+    };
 
     println!("Took {} cycles", cycles_taken);
     println!("Value of CPU.A = 0x{:x}", cpu.a);

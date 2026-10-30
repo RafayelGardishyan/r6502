@@ -37,7 +37,7 @@ pub fn create_cpu_from_state(state: &CpuState) -> (CPU, MockRAM) {
     cpu.sf = StatusFlags(state.p);
 
     for (addr, data) in &state.ram {
-        mem.write(*addr, *data);
+        mem.write(*addr, *data).expect("Error writing memory");
     }
 
     (cpu, mem)
