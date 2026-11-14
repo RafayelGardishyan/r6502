@@ -1,4 +1,4 @@
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     LDA, LDX, LDY,
     STA, STX, STY,
@@ -10,6 +10,8 @@ pub enum Instruction {
     ADC,
     NOP
 }
+
+pub const READ_ONLY: [Instruction; 7] = [Instruction::LDA, Instruction::LDX, Instruction::LDY, Instruction::AND, Instruction::ORA, Instruction::EOR, Instruction::ADC];
 
 // LDA
 pub const LDA_IMM: u8 = 0xA9;

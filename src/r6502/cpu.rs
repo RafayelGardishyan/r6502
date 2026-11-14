@@ -1,4 +1,5 @@
-use crate::r6502::instructions::Instruction;
+use std::cmp::PartialEq;
+use crate::r6502::instructions::{Instruction, READ_ONLY};
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -72,6 +73,7 @@ pub enum AddressingMode {
     IndexedIndirect,
     IndirectIndexed,
     Accumulator,
+    Implied
 }
 
 pub enum Operation {
@@ -130,7 +132,7 @@ impl StatusFlags {
     pub const NEGATIVE: u8 = 1 << 7;
 
     pub fn set(&mut self, flag: u8, value: Bit) {
-        if value {
+        if value || flag == Self::UNUSED{
             self.0 |= flag;
         } else {
             self.0 &= !flag;
@@ -138,6 +140,10 @@ impl StatusFlags {
     }
 
     pub fn get(&self, flag: u8) -> Bit {
+        if flag == Self::UNUSED {
+            return ONE
+        }
+
         (self.0 & flag) != 0
     }
 
@@ -171,6 +177,7 @@ impl Default for CPU {
         }
     }
 }
+
 impl CPU {
     pub fn reset(&mut self, mem: &mut MockRAM) {
         self.reset_with_address(0xFFFC, mem)
@@ -201,6 +208,7 @@ impl CPU {
 
         while cycles_remaining > 0 {
             self.execute_cycle(bus).expect("Error while executing");
+
             cycles_remaining -= 1;
         }
 
@@ -209,7 +217,7 @@ impl CPU {
 
     pub fn execute_cycle<B: Bus>(&mut self, bus: &mut B) -> EmulatorResult<()> {
         match (self.cycle, self.address_ready) {
-            (0, _) => {
+            (0, false) => {
                 self.fetch_and_decode(bus)
                     .expect("CPU Error: failed to decode");
                 self.cycle += 1;
@@ -218,6 +226,7 @@ impl CPU {
             (_, false) => {
                 self.resolve_address(bus)
                     .expect("CPU Error: address resolution failed");
+
                 self.cycle += 1;
             }
             (_, true) => {
@@ -226,6 +235,29 @@ impl CPU {
                 self.exec_cycle += 1;
             }
         }
+
+        Ok(())
+    }
+
+    pub fn set_register(&mut self, register: Register, value: Byte) -> EmulatorResult<()> {
+        match register {
+            Register::SP => {
+                self.sp = value;
+                return Ok(())
+            }
+            Register::A => {
+                self.a = value;
+
+            }
+            Register::X => {
+                self.x = value;
+            }
+            Register::Y => {
+                self.y = value;
+            }
+            _ => return Err("Cannot set PC from here")
+        }
+        self.set_nz(value);
 
         Ok(())
     }
@@ -277,21 +309,177 @@ impl CPU {
 
                 self.finalise_execution();
             }
-            Instruction::TAX => {}
-            Instruction::TAY => {}
-            Instruction::TXA => {}
-            Instruction::TYA => {}
-            Instruction::TSX => {}
-            Instruction::TXS => {}
-            Instruction::PHA => {}
-            Instruction::PHP => {}
-            Instruction::PLA => {}
-            Instruction::PLP => {}
-            Instruction::AND => {}
-            Instruction::EOR => {}
-            Instruction::ORA => {}
-            Instruction::BIT => {}
-            Instruction::ADC => {}
+            Instruction::TAX => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::X, self.a)?;
+                self.finalise_execution();
+            }
+            Instruction::TAY => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::Y, self.a)?;
+                self.finalise_execution();
+            }
+            Instruction::TXA => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::A, self.x)?;
+                self.finalise_execution();
+            }
+            Instruction::TYA => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::A, self.y)?;
+                self.finalise_execution();
+            }
+            Instruction::TSX => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::X, self.sp)?;
+                self.finalise_execution();
+            }
+            Instruction::TXS => {
+                assert_eq!(self.exec_cycle, 0);
+
+                self.set_register(Register::SP, self.x)?;
+                self.finalise_execution();
+            }
+            Instruction::PHA => {
+                match self.exec_cycle {
+                    0 => {
+                        bus.read(self.pc)?; // Throw read
+                    }
+                    1 => {
+                        bus.write(self.sp() as Word, self.a)?;
+                        self.sp = self.sp.wrapping_sub(1);
+                        self.finalise_execution();
+                    }
+                    _ => return Err("Wrong cycle for instruction")
+                }
+            }
+            Instruction::PHP => {
+                match self.exec_cycle {
+                    0 => {
+                        bus.read(self.pc)?; // Throw read
+                    }
+                    1 => {
+                        bus.write(self.sp(), read_sf(self.sf))?;
+                        self.sp = self.sp.wrapping_sub(1);
+                        self.finalise_execution();
+                    }
+                    _ => return Err("Wrong cycle for instruction")
+                }
+            }
+            Instruction::PLA => {
+                match self.exec_cycle {
+                    0 => {
+                        bus.read(self.pc)?; // Throw read
+                    }
+                    1 => {
+                        self.sp = self.sp.wrapping_add(1);
+                    }
+                    2 => {
+                        self.set_register(Register::A, bus.read(self.sp())?)?;
+                        self.finalise_execution();
+                    }
+                    _ => return Err("Wrong cycle for instruction")
+                }
+            }
+            Instruction::PLP => {
+                match self.exec_cycle {
+                    0 => {
+                        bus.read(self.pc)?; // Throw read
+                    }
+                    1 => {
+                        self.sp = self.sp.wrapping_add(1);
+                    }
+                    2 => {
+                        let read = bus.read(self.sp())?;
+                        self.sf.0 = read & 0b11001111 | 0b00100000; // Ignore bits 4, 5 and set 5 to 1
+                        self.finalise_execution();
+                    }
+                    _ => return Err("Wrong cycle for instruction")
+                }
+            }
+            Instruction::AND => {
+                assert_eq!(self.exec_cycle, 0);
+
+                let value = bus.read(self.current_address)?;
+                self.set_register(Register::A, self.a & value)?;
+                self.finalise_execution();
+            }
+            Instruction::EOR => {
+                assert_eq!(self.exec_cycle, 0);
+
+                let value = bus.read(self.current_address)?;
+                self.set_register(Register::A, self.a ^ value)?;
+                self.finalise_execution();
+            }
+            Instruction::ORA => {
+                assert_eq!(self.exec_cycle, 0);
+
+                let value = bus.read(self.current_address)?;
+                self.set_register(Register::A, self.a | value)?;
+                self.finalise_execution();
+            }
+            Instruction::BIT => {
+                assert_eq!(self.exec_cycle, 0);
+
+                let value = bus.read(self.current_address)?;
+
+                self.sf.set(StatusFlags::ZERO, self.a & value == 0);
+                self.sf.set(StatusFlags::OVERFLOW, value & 0b01000000 > 0);
+                self.sf.set(StatusFlags::NEGATIVE, value & 0b10000000 > 0);
+
+                self.finalise_execution();
+            }
+            Instruction::ADC => {
+                assert_eq!(self.exec_cycle, 0);
+                let val = bus.read(self.current_address)?;
+                let carry_in = if self.sf.get(StatusFlags::CARRY) { 1 } else { 0 };
+                let old_a = self.a;
+
+                if self.sf.get(StatusFlags::DECIMAL) {
+                    let mut al = (old_a & 0x0F) + (val & 0x0F) + carry_in;
+                    if al > 0x09 {
+                        al = al.wrapping_add(0x06);
+                    }
+
+                    let mut ah = (old_a >> 4) + (val >> 4) + (if al > 0x0F { 1 } else { 0 });
+
+                    let bin_sum = old_a.wrapping_add(val).wrapping_add(carry_in);
+                    let intermediate = (ah << 4) | (al & 0x0F);
+
+                    self.sf.set(StatusFlags::ZERO, bin_sum == 0);
+                    self.sf.set(StatusFlags::NEGATIVE, (ah & 0x08) != 0);
+                    self.sf.set(
+                        StatusFlags::OVERFLOW,
+                        ((old_a ^ intermediate) & (val ^ intermediate) & 0x80) != 0,
+                    );
+
+                    if ah > 0x09 {
+                        ah = ah.wrapping_add(0x06);
+                    }
+
+                    self.sf.set(StatusFlags::CARRY, ah > 0x0F);
+
+                    self.a = ((ah << 4) | (al & 0x0F)) & 0xFF;
+                } else {
+                    let (nv1, of1) = old_a.overflowing_add(val);
+                    let (nv2, of2) = nv1.overflowing_add(carry_in);
+
+                    self.sf.set(StatusFlags::CARRY, of1 || of2);
+                    self.sf.set(
+                        StatusFlags::OVERFLOW,
+                        ((old_a ^ nv2) & (val ^ nv2) & 0x80) != 0,
+                    );
+
+                    self.set_register(Register::A, nv2)?;
+                }
+
+                self.finalise_execution();
+            }
             Instruction::NOP => {}
         }
 
@@ -367,7 +555,7 @@ impl CPU {
 
                     let new_address = self.current_address.wrapping_add(self.x as Word);
 
-                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
+                    self.address_ready = self.read_only() && (self.current_address & 0xFF00 == new_address & 0xFF00);
 
                     self.current_address = new_address;
                 }
@@ -388,7 +576,7 @@ impl CPU {
 
                     let new_address = self.current_address.wrapping_add(self.y as Word);
 
-                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
+                    self.address_ready = self.read_only() && (self.current_address & 0xFF00 == new_address & 0xFF00);
 
                     self.current_address = new_address;
                 }
@@ -411,7 +599,7 @@ impl CPU {
                 }
                 4 => {
                     self.current_address |=
-                        (bus.read((self.pointer + 1) as Word).expect("Memory read error") as Word) << 8;
+                        (bus.read((self.pointer.wrapping_add(1)) as Word).expect("Memory read error") as Word) << 8;
                     self.address_ready = true;
                 }
                 _ => return Err("Address resolution error: invalid cycle for addressing mode"),
@@ -427,11 +615,11 @@ impl CPU {
                 }
                 3 => {
                     self.current_address |=
-                        (bus.read((self.pointer + 1) as Word).expect("Memory read error") as Word) << 8;
+                        (bus.read((self.pointer.wrapping_add(1)) as Word).expect("Memory read error") as Word) << 8;
 
                     let new_address = self.current_address.wrapping_add(self.y as Word);
 
-                    self.address_ready = self.current_address & 0xFF00 == new_address & 0xFF00;
+                    self.address_ready = self.read_only() && (self.current_address & 0xFF00 == new_address & 0xFF00);
 
                     self.current_address = new_address;
                 }
@@ -440,7 +628,8 @@ impl CPU {
                 }
                 _ => return Err("Address resolution error: invalid cycle for addressing mode"),
             },
-            AddressingMode::Accumulator => return Err("Not implemented yet"),
+            AddressingMode::Implied => return Err("Implied address no resolution needed"),
+            _ => return Err("Not implemented yet")
         }
 
         Ok(())
@@ -457,7 +646,28 @@ impl CPU {
         let bbb = (opcode >> 2) & 0x07;
         let aaa = (opcode >> 5) & 0x07;
 
-        // 0b10011001
+        let implied_instruction = match opcode {
+            0xAA => Some(Instruction::TAX),
+            0xA8 => Some(Instruction::TAY),
+            0x8A => Some(Instruction::TXA),
+            0x98 => Some(Instruction::TYA),
+            0xBA => Some(Instruction::TSX),
+            0x9A => Some(Instruction::TXS),
+            0x48 => Some(Instruction::PHA),
+            0x08 => Some(Instruction::PHP),
+            0x68 => Some(Instruction::PLA),
+            0x28 => Some(Instruction::PLP),
+            0xEA => Some(Instruction::NOP),
+            _ => None,
+        };
+
+        if let Some(instr) = implied_instruction {
+            self.current_instruction = instr;
+            self.current_addressing_mode = AddressingMode::Implied;
+            self.increment_pc();
+            self.address_ready = true; // Execute directly without any access
+            return Ok(());
+        }
 
         self.current_addressing_mode = match cc {
             0b01 => match bbb {
@@ -596,4 +806,16 @@ impl CPU {
         self.cycle = 0;
         self.address_ready = false;
     }
+
+    fn read_only(&self) -> bool {
+        READ_ONLY.contains(&self.current_instruction)
+    }
+
+    fn sp(&self) -> Word {
+        0x0100 | self.sp as Word
+    }
+}
+
+fn read_sf(status_flags: StatusFlags) -> Byte {
+    status_flags.0 | 0b00110000
 }

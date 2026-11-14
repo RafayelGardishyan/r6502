@@ -18,10 +18,7 @@ fn main() {
 
     cpu.x = 0x01;
 
-    let cycles_taken = match cpu.execute(1, &mut mem) {
-        Ok(v) => v,
-        _ => 0
-    };
+    let cycles_taken = cpu.execute(1, &mut mem).unwrap_or_default();
 
     println!("Took {} cycles", cycles_taken);
     println!("Value of CPU.A = 0x{:x}", cpu.a);
